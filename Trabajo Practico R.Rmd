@@ -1,0 +1,642 @@
+---
+title: "Evolución del rendimiento competitivo en selecciones nacionales: Patrones de goles, ventaja local y cambios temporales (2000-2026)"
+output:
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    toc_depth: 3
+    number_sections: true
+    df_print: paged
+    css: |
+      body { font-family: 'Georgia', serif; font-size: 15px; color: #2c2c2c; }
+      h1, h2, h3 { color: #1a3a5c; }
+      .section-box {
+        background: #f4f8fc;
+        border-left: 4px solid #1a6ca8;
+        padding: 12px 18px;
+        margin: 16px 0;
+        border-radius: 4px;
+      }
+      .highlight-box {
+        background: #fff8e1;
+        border-left: 4px solid #f0a500;
+        padding: 12px 18px;
+        margin: 16px 0;
+        border-radius: 4px;
+      }
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = FALSE,   # oculta el código en el HTML entregado
+  message = FALSE,
+  warning = FALSE,
+  fig.align = "center",
+  fig.width  = 9,
+  fig.height = 5.5
+)
+
+library(tidyverse)
+library(lubridate)
+```
+
+---
+
+# Introducción
+
+## Descripción del dataset
+
+<div class="section-box">
+El dataset seleccionado contiene información sobre **partidos internacionales de fútbol**
+disputados desde 1872 hasta la actualidad, con énfasis en el período 2000–2026.
+Comprende más de 25 000 registros de encuentros entre selecciones nacionales en distintas
+competiciones.
+</div>
+
+Las variables disponibles son:
+
+| Variable | Descripción |
+|---|---|
+| `date` | Fecha del partido |
+| `home_team` | Selección local |
+| `away_team` | Selección visitante |
+| `home_score` | Goles del equipo local |
+| `away_score` | Goles del equipo visitante |
+| `tournament` | Tipo de competición |
+| `country` | País anfitrión |
+| `neutral` | Cancha neutral (TRUE / FALSE) |
+
+**Fuente:** [All International Football Results — Kaggle](https://www.kaggle.com/datasets/patateriedata/all-international-football-results)
+
+## Justificación del dataset
+
+El dataset fue elegido por su **volumen** (> 25 000 registros desde 2000, 8 variables),
+su **acceso público** desde Kaggle y su **relevancia histórica**: permite observar la
+profesionalización, la expansión global y los cambios competitivos del fútbol a lo largo de
+más de 150 años. Su magnitud posibilita un análisis robusto con estadísticas confiables y
+aplica un amplio rango de técnicas — análisis temporal, estadística descriptiva, correlaciones
+y agrupamiento de datos.
+
+## Objetivos del análisis
+
+Se busca responder las siguientes preguntas:
+
+1. ¿Cómo fue el promedio de goles en cada Mundial?
+2. ¿El rendimiento ofensivo de las selecciones históricamente dominantes cambió entre la primera (2002–2010) y la segunda década (2014–2022)?
+3. ¿Cuánto influye jugar de local según el tipo de torneo?
+4. ¿Ha cambiado el promedio de goles a lo largo de los años?
+5. ¿Cómo se distribuyen los resultados? ¿Predominan los partidos cerrados o las goleadas?
+6. ¿Cómo evolucionó Argentina ofensiva y defensivamente entre 2000 y 2026?
+7. ¿Qué patrones permiten anticipar el Mundial 2026?
+
+---
+
+# Limpieza y preparación de datos
+
+```{r carga-limpieza}
+# Carga del dataset
+df <- read.csv("all_matches.csv")
+
+# Conversión de fecha
+df$date <- as.Date(df$date)
+
+# Extracción del año
+df$year <- year(df$date)
+
+# Filtro: desde 2000 en adelante
+df <- df[df$year >= 2000, ]
+
+# Conversión de neutral a lógico
+df$neutral <- df$neutral == "True"
+
+# Variables derivadas
+df$total_goles <- df$home_score + df$away_score
+
+df$resultado <- ifelse(df$home_score > df$away_score, "Victoria local",
+                ifelse(df$away_score > df$home_score, "Victoria visitante",
+                "Empate"))
+
+df$diferencia <- abs(df$home_score - df$away_score)
+
+df$tipo_torneo <- ifelse(
+  df$tournament == "Friendly", "Amistoso",
+  ifelse(df$tournament == "World Cup", "Mundial", "Eliminatoria / Copa")
+)
+
+df$gano_local <- df$home_score > df$away_score
+
+df$tipo_resultado <- ifelse(df$diferencia == 0, "Empate",
+                     ifelse(df$diferencia == 1, "1 gol",
+                     ifelse(df$diferencia == 2, "2 goles", "Goleada (+3)")))
+
+df$tipo_resultado <- factor(df$tipo_resultado,
+                            levels = c("Empate", "1 gol", "2 goles", "Goleada (+3)"))
+```
+
+Las transformaciones realizadas fueron:
+
+- Conversión de la columna `date` a formato `Date` con `as.Date()`.
+- Extracción del **año** como nueva variable `year`.
+- Filtrado de registros desde el año **2000** en adelante (`r nrow(df)` partidos).
+- Conversión de `neutral` de texto a booleano.
+- Creación de **variables derivadas**: `total_goles`, `resultado`, `diferencia`, `tipo_torneo`, `gano_local` y `tipo_resultado`.
+
+<div class="highlight-box">
+Luego de la limpieza quedaron **`r format(nrow(df), big.mark = ".")` partidos** con
+**`r ncol(df)` variables** (8 originales + columnas derivadas).
+</div>
+
+---
+
+# Análisis exploratorio
+
+## Pregunta 1: ¿Cómo fue el promedio de goles en cada Mundial?
+
+```{r p1-goles-mundiales}
+mundiales <- df[df$tournament == "World Cup", ]
+
+promedio_goles <- aggregate(total_goles ~ year, data = mundiales, FUN = mean)
+promedio_goles$total_goles <- round(promedio_goles$total_goles, 2)
+promedio_goles$year <- as.factor(promedio_goles$year)
+
+ggplot(promedio_goles, aes(x = year, y = total_goles)) +
+  geom_bar(stat = "identity", fill = "steelblue", width = 0.5) +
+  geom_text(aes(label = total_goles), vjust = -0.4, size = 3.5) +
+  labs(
+    title   = "Promedio de goles por partido en cada Mundial (2000–2022)",
+    x = "Mundial",
+    y = "Promedio de goles"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", size = 13))
+```
+
+El promedio de goles oscila entre **`r min(promedio_goles$total_goles)`** y
+**`r max(promedio_goles$total_goles)`** goles por partido. A partir de 2010, 
+los Mundiales muestran una tendencia alcista, llegando a 
+**`r max(promedio_goles$total_goles)`** en 2022.
+---
+
+## Pregunta 2: Rendimiento ofensivo de las selecciones dominantes (2002–2010 vs. 2014–2022)
+
+```{r p2-rendimiento-decadas}
+anios_mundial_torneos <- c(2002, 2006, 2010, 2014, 2018, 2022)
+mundiales_torneos <- mundiales[mundiales$year %in% anios_mundial_torneos, ]
+
+# Goles y partidos como local
+goles_local    <- aggregate(home_score ~ home_team + year, data = mundiales_torneos, FUN = sum)
+partidos_local <- aggregate(home_score ~ home_team + year, data = mundiales_torneos, FUN = length)
+names(goles_local)    <- c("equipo", "year", "goles_local")
+names(partidos_local) <- c("equipo", "year", "partidos_local")
+
+# Goles y partidos como visitante
+goles_visita    <- aggregate(away_score ~ away_team + year, data = mundiales_torneos, FUN = sum)
+partidos_visita <- aggregate(away_score ~ away_team + year, data = mundiales_torneos, FUN = length)
+names(goles_visita)    <- c("equipo", "year", "goles_visita")
+names(partidos_visita) <- c("equipo", "year", "partidos_visita")
+
+# Combinamos
+combinado <- merge(goles_local, goles_visita, by = c("equipo", "year"), all = TRUE)
+combinado <- merge(combinado, partidos_local, by = c("equipo", "year"), all = TRUE)
+combinado <- merge(combinado, partidos_visita, by = c("equipo", "year"), all = TRUE)
+combinado[is.na(combinado)] <- 0
+
+combinado$goles_totales    <- combinado$goles_local + combinado$goles_visita
+combinado$partidos_totales <- combinado$partidos_local + combinado$partidos_visita
+combinado$promedio         <- round(combinado$goles_totales / combinado$partidos_totales, 2)
+
+# Resumen global por equipo
+resumen_global <- aggregate(cbind(goles_totales, partidos_totales) ~ equipo, data = combinado, FUN = sum)
+resumen_global$mundiales_jugados <- aggregate(year ~ equipo, data = combinado, FUN = length)$year
+resumen_global$promedio_global   <- round(resumen_global$goles_totales / resumen_global$partidos_totales, 2)
+
+top_selecciones <- resumen_global[
+  resumen_global$mundiales_jugados >= 3 & resumen_global$promedio_global > 1.5, "equipo"
+]
+
+evolucion <- combinado[combinado$equipo %in% top_selecciones, c("equipo", "year", "promedio")]
+evolucion$year <- as.factor(evolucion$year)
+
+ggplot(evolucion, aes(x = year, y = promedio, fill = promedio)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = promedio), vjust = -0.4, size = 3) +
+  scale_fill_gradient(low = "#f0a500", high = "#c0392b") +
+  facet_wrap(~ equipo, ncol = 3) +
+  labs(
+    title    = "Evolución del rendimiento ofensivo en Mundiales (2002–2022)",
+    subtitle = "Promedio de goles por partido por selección",
+    x = "Mundial", y = "Promedio de goles", fill = "Promedio"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title  = element_text(face = "bold", size = 13),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    strip.text  = element_text(face = "bold", size = 10)
+  )
+```
+
+Se observa un comportamiento heterogéneo entre selecciones: mientras equipos como Argentina, Francia y Portugal mejoraron su rendimiento ofensivo en 2014–2022, potencias históricas como Brasil y Alemania muestran una caída en su producción de goles. Esto sugiere un reequilibrio competitivo más que una tendencia defensiva global.
+
+---
+
+## Pregunta 3: ¿Cuánto influye jugar de local según el tipo de torneo?
+
+```{r p3-ventaja-local}
+df_no_neutral <- df[df$neutral == FALSE, ]
+
+ventaja_local <- aggregate(gano_local ~ tipo_torneo, data = df_no_neutral, FUN = mean)
+ventaja_local$porcentaje <- round(ventaja_local$gano_local * 100, 1)
+
+ggplot(ventaja_local, aes(x = tipo_torneo, y = porcentaje, fill = tipo_torneo)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = paste0(porcentaje, "%")), vjust = -0.5, fontface = "bold", size = 4.5) +
+  geom_hline(yintercept = 50, linetype = "dashed", color = "gray40", linewidth = 0.8) +
+  annotate("text", x = 0.6, y = 51.5, label = "50% (sin ventaja)", color = "gray40", size = 3.2) +
+  labs(
+    title    = "Ventaja local por tipo de torneo (2000–presente)",
+    subtitle = "Solo partidos en cancha propia — se excluyen sedes neutrales",
+    x = "Tipo de torneo", y = "% de victorias de local", fill = NULL
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none", plot.title = element_text(face = "bold", size = 13))
+```
+
+La ventaja local es más pronunciada en **Eliminatorias / Copas** y menor en
+**Amistosos**, consistente con la hipótesis de que la presión competitiva amplifica el
+efecto de jugar en casa.
+
+---
+
+## Pregunta 4: ¿Ha cambiado el promedio de goles a lo largo de los años?
+
+```{r p4-evolucion-goles}
+promedio_anual <- aggregate(total_goles ~ year, data = df, FUN = mean)
+promedio_anual$total_goles <- round(promedio_anual$total_goles, 2)
+
+años_mundial <- c(2002, 2006, 2010, 2014, 2018, 2022)
+promedio_anual$tipo <- ifelse(promedio_anual$year %in% años_mundial,
+                              "Año de Mundial", "Año sin Mundial")
+
+promedio_global_val <- round(mean(promedio_anual$total_goles), 2)
+
+ggplot(promedio_anual, aes(x = year, y = total_goles)) +
+  geom_hline(yintercept = promedio_global_val, linetype = "dashed",
+             color = "gray60", linewidth = 0.7) +
+  annotate("text", x = 2000.3, y = promedio_global_val + 0.04,
+           label = paste("Promedio global:", promedio_global_val),
+           color = "gray50", hjust = 0, size = 3.2) +
+  geom_smooth(method = "loess", se = TRUE, color = "gray40", fill = "gray85",
+              linewidth = 0.8, alpha = 0.4) +
+  geom_line(color = "gray70", linewidth = 0.6) +
+  geom_point(aes(color = tipo, size = tipo)) +
+  geom_text(data = promedio_anual[promedio_anual$tipo == "Año de Mundial", ],
+            aes(label = total_goles), vjust = -0.9, size = 3,
+            fontface = "bold", color = "firebrick") +
+  scale_color_manual(values = c("Año de Mundial" = "firebrick", "Año sin Mundial" = "steelblue")) +
+  scale_size_manual(values  = c("Año de Mundial" = 3.5, "Año sin Mundial" = 2)) +
+  scale_x_continuous(breaks = seq(2000, 2026, by = 2)) +
+  scale_y_continuous(limits = c(2.3, 3.2)) +
+  labs(
+    title    = "Promedio de goles por partido por año (2000–2026)",
+    subtitle = "Los años de Mundial (rojo) muestran sistemáticamente promedios más bajos",
+    x = "Año", y = "Promedio de goles por partido", color = NULL, size = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(color = "gray40", size = 10),
+    legend.position = "top",
+    axis.text.x   = element_text(angle = 45, hjust = 1)
+  )
+```
+
+<div class="highlight-box">
+Los años de **Mundial** presentan sistemáticamente promedios de goles por debajo del
+promedio global de **`r promedio_global_val` goles/partido**, lo que sugiere un juego más
+cauteloso bajo la presión eliminatoria.
+</div>
+
+---
+
+## Pregunta 5: ¿Cómo se distribuyen los resultados?
+
+```{r p5-distribucion-resultados}
+# Estadísticas descriptivas
+cat_stats <- data.frame(
+  Métrica = c("Promedio de goles por partido",
+              "Desviación estándar de goles",
+              "Promedio de diferencia de goles",
+              "Desviación estándar de diferencia",
+              "% partidos con diferencia ≤ 1 gol"),
+  Valor = c(
+    round(mean(df$total_goles), 2),
+    round(sd(df$total_goles), 2),
+    round(mean(df$diferencia), 2),
+    round(sd(df$diferencia), 2),
+    paste0(round(mean(df$diferencia <= 1) * 100, 1), "%")
+  )
+)
+knitr::kable(cat_stats, align = c("l","r"), caption = "Estadísticas descriptivas")
+```
+
+```{r p5-donut}
+conteo <- as.data.frame(table(df$tipo_resultado))
+names(conteo) <- c("tipo", "cantidad")
+conteo$porcentaje <- round(conteo$cantidad / sum(conteo$cantidad) * 100, 1)
+conteo$fraccion  <- conteo$cantidad / sum(conteo$cantidad)
+conteo$ymax      <- cumsum(conteo$fraccion)
+conteo$ymin      <- c(0, head(conteo$ymax, -1))
+conteo$label_pos <- (conteo$ymax + conteo$ymin) / 2
+conteo$etiqueta  <- paste0(conteo$tipo, "\n", conteo$porcentaje, "%")
+
+colores <- c("Empate"       = "#3498db",
+             "1 gol"        = "#2ecc71",
+             "2 goles"      = "#f39c12",
+             "Goleada (+3)" = "#e74c3c")
+
+ggplot(conteo, aes(ymax = ymax, ymin = ymin, xmax = 4, xmin = 2.4, fill = tipo)) +
+  geom_rect() +
+  geom_text(aes(x = 4.7, y = label_pos, label = etiqueta, color = tipo),
+            size = 3.5, fontface = "bold", lineheight = 1.2) +
+  annotate("text", x = 0, y = 0,
+           label = paste0(format(nrow(df), big.mark = "."), "\npartidos"),
+           size = 4, fontface = "bold", color = "gray30", hjust = 0.5, vjust = 0.5) +
+  scale_fill_manual(values  = colores) +
+  scale_color_manual(values = colores) +
+  coord_polar(theta = "y") +
+  xlim(c(0, 5.2)) +
+  labs(
+    title    = "¿Cómo terminan los partidos de fútbol internacional?",
+    subtitle = "El 59% se decide por 1 gol o termina empatado — solo 1 de cada 5 es goleada"
+  ) +
+  theme_void() +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13, hjust = 0.5),
+    plot.subtitle = element_text(color = "gray40", size = 10, hjust = 0.5,
+                                 margin = margin(b = 10)),
+    legend.position = "none"
+  )
+```
+
+La mayoría de los partidos internacionales son **cerrados**: más de la mitad termina
+en empate o con 1 gol de diferencia, mientras que solo 1 de cada 5 puede considerarse
+una goleada.
+
+---
+
+## Pregunta 6: Evolución ofensiva y defensiva de Argentina (2000–2026)
+
+```{r p6-argentina}
+argentina <- df[df$home_team == "Argentina" | df$away_team == "Argentina", ]
+
+argentina$goles_arg   <- ifelse(argentina$home_team == "Argentina",
+                                argentina$home_score, argentina$away_score)
+argentina$goles_rival <- ifelse(argentina$home_team == "Argentina",
+                                argentina$away_score, argentina$home_score)
+
+goles_anio <- aggregate(cbind(goles_arg, goles_rival) ~ year, data = argentina, FUN = mean)
+goles_anio$goles_arg   <- round(goles_anio$goles_arg, 2)
+goles_anio$goles_rival <- round(goles_anio$goles_rival, 2)
+
+goles_largo <- reshape(goles_anio,
+                       varying   = c("goles_arg", "goles_rival"),
+                       v.names   = "promedio",
+                       timevar   = "tipo",
+                       times     = c("Goles a favor", "Goles en contra"),
+                       direction = "long")
+
+titulos <- data.frame(year = c(2021, 2022), label = c("Copa\nAmérica", "Mundial\nQatar"))
+
+ggplot(goles_largo, aes(x = year, y = promedio, color = tipo, fill = tipo)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 2.5) +
+  geom_area(alpha = 0.15, position = "identity") +
+  geom_vline(data = titulos, aes(xintercept = year),
+             linetype = "dashed", color = "#f39c12", linewidth = 0.9) +
+  geom_label(data = titulos, aes(x = year, y = 3.2, label = label),
+             color = "#f39c12", fill = "white", size = 3, fontface = "bold",
+             label.size = 0.3, inherit.aes = FALSE) +
+  scale_color_manual(values = c("Goles a favor" = "#27ae60", "Goles en contra" = "#e74c3c")) +
+  scale_fill_manual(values  = c("Goles a favor" = "#27ae60", "Goles en contra" = "#e74c3c")) +
+  scale_x_continuous(breaks = seq(2000, 2026, by = 2)) +
+  labs(
+    title    = "Evolución ofensiva y defensiva de Argentina (2000–2026)",
+    subtitle = "Promedio de goles a favor y en contra por partido · Las líneas doradas marcan títulos\n*El valor de 2026 corresponde a una muestra muy pequeña de partidos.",
+    x = "Año", y = "Promedio de goles por partido", color = NULL, fill = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(color = "gray40", size = 9),
+    legend.position = "top"
+  )
+```
+
+<div class="highlight-box">
+Argentina atravesó una **transformación defensiva histórica**: de recibir más de 1 gol
+por partido antes de 2019, a solo ~0.37 en el período 2023–2025, el mejor registro
+entre los clasificados al Mundial 2026. Esta solidez coincide con sus dos títulos
+consecutivos (Copa América 2021 y Mundial Qatar 2022).
+</div>
+
+---
+
+## Pregunta 7: Patrones de cara al Mundial 2026
+
+### Forma reciente de los clasificados (2023–2025)
+
+```{r p7-forma-reciente}
+clasificados <- c("Argentina", "Brazil", "France", "Germany", "Spain",
+                  "England", "Portugal", "Netherlands", "Belgium", "Uruguay",
+                  "Mexico", "United States", "Canada", "Japan", "South Korea",
+                  "Morocco", "Senegal", "Australia", "Croatia", "Switzerland")
+
+recientes <- df[df$year %in% c(2023, 2024, 2025), ]
+
+local_r <- aggregate(cbind(home_score, away_score) ~ home_team,
+                     data = recientes[recientes$home_team %in% clasificados, ], FUN = sum)
+local_n <- aggregate(home_score ~ home_team,
+                     data = recientes[recientes$home_team %in% clasificados, ], FUN = length)
+names(local_r) <- c("equipo", "gf_l", "gc_l")
+names(local_n) <- c("equipo", "n_l")
+
+visita_r <- aggregate(cbind(away_score, home_score) ~ away_team,
+                      data = recientes[recientes$away_team %in% clasificados, ], FUN = sum)
+visita_n <- aggregate(away_score ~ away_team,
+                      data = recientes[recientes$away_team %in% clasificados, ], FUN = length)
+names(visita_r) <- c("equipo", "gf_v", "gc_v")
+names(visita_n) <- c("equipo", "n_v")
+
+forma <- merge(local_r, local_n, by = "equipo", all = TRUE)
+forma <- merge(forma, visita_r, by = "equipo", all = TRUE)
+forma <- merge(forma, visita_n, by = "equipo", all = TRUE)
+forma[is.na(forma)] <- 0
+
+forma$gf      <- forma$gf_l + forma$gf_v
+forma$gc      <- forma$gc_l + forma$gc_v
+forma$n       <- forma$n_l  + forma$n_v
+forma$gf_prom <- round(forma$gf / forma$n, 2)
+forma$gc_prom <- round(forma$gc / forma$n, 2)
+
+traducciones <- c(
+  "Argentina" = "Argentina", "Brazil" = "Brasil", "France" = "Francia",
+  "Germany" = "Alemania", "Spain" = "España", "England" = "Inglaterra",
+  "Portugal" = "Portugal", "Netherlands" = "Países Bajos", "Belgium" = "Bélgica",
+  "Uruguay" = "Uruguay", "Mexico" = "México", "United States" = "EE.UU.",
+  "Canada" = "Canadá", "Japan" = "Japón", "South Korea" = "Corea del Sur",
+  "Morocco" = "Marruecos", "Senegal" = "Senegal", "Australia" = "Australia",
+  "Croatia" = "Croacia", "Switzerland" = "Suiza"
+)
+forma$equipo_es <- traducciones[forma$equipo]
+forma <- forma[order(forma$gf_prom, decreasing = TRUE), ]
+forma$equipo_es <- factor(forma$equipo_es, levels = forma$equipo_es)
+
+forma_largo <- rbind(
+  data.frame(equipo = forma$equipo_es, valor = forma$gf_prom, tipo = "Goles a favor"),
+  data.frame(equipo = forma$equipo_es, valor = forma$gc_prom, tipo = "Goles en contra")
+)
+forma_largo$tipo <- factor(forma_largo$tipo, levels = c("Goles a favor", "Goles en contra"))
+
+ggplot(forma_largo, aes(x = valor, y = equipo, fill = tipo)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  scale_fill_manual(values = c("Goles a favor" = "#27ae60", "Goles en contra" = "#e74c3c")) +
+  scale_x_continuous(limits = c(0, 3.5), breaks = seq(0, 3.5, by = 0.5)) +
+  labs(
+    title    = "Forma reciente de los clasificados al Mundial 2026 (2023–2025)",
+    subtitle = "Promedio de goles a favor y en contra por partido",
+    x = "Promedio de goles por partido", y = NULL, fill = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(color = "gray40", size = 10),
+    legend.position = "top",
+    panel.grid.major.y = element_blank()
+  )
+```
+
+### ¿El anfitrión tiene ventaja?
+
+```{r p7-anfitrion}
+mundiales_wc <- df[df$tournament == "World Cup", ]
+
+anfitriones_df <- data.frame(
+  year   = c(2002, 2002, 2006, 2010, 2014, 2018, 2022),
+  equipo = c("South Korea", "Japan", "Germany", "South Africa",
+             "Brazil", "Russia", "Qatar")
+)
+
+resultado_anf <- do.call(rbind, lapply(1:nrow(anfitriones_df), function(i) {
+  yr <- anfitriones_df$year[i]; eq <- anfitriones_df$equipo[i]
+  pm <- mundiales_wc[mundiales_wc$year == yr &
+          (mundiales_wc$home_team == eq | mundiales_wc$away_team == eq), ]
+  if (nrow(pm) == 0) return(NULL)
+  gf   <- sum(ifelse(pm$home_team == eq, pm$home_score, pm$away_score))
+  gc   <- sum(ifelse(pm$home_team == eq, pm$away_score, pm$home_score))
+  vict <- sum(ifelse(pm$home_team == eq,
+                     pm$home_score > pm$away_score,
+                     pm$away_score > pm$home_score))
+  data.frame(year = yr, equipo = eq, partidos = nrow(pm),
+             victorias = vict, gf = gf, gc = gc,
+             pct_victorias = round(vict / nrow(pm) * 100, 1))
+}))
+
+resultado_anf$etiqueta <- paste0(resultado_anf$equipo, "\n(", resultado_anf$year, ")")
+resultado_anf$etiqueta <- factor(resultado_anf$etiqueta,
+                                 levels = resultado_anf$etiqueta[order(resultado_anf$year)])
+
+ggplot(resultado_anf, aes(x = etiqueta, y = pct_victorias, fill = pct_victorias)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_text(aes(label = paste0(pct_victorias, "%")), vjust = -0.5, fontface = "bold", size = 3.5) +
+  geom_hline(yintercept = 50, linetype = "dashed", color = "gray40", linewidth = 0.7) +
+  annotate("text", x = 0.6, y = 52, label = "50%", color = "gray40", size = 3) +
+  scale_fill_gradient(low = "#f39c12", high = "#27ae60") +
+  labs(
+    title    = "¿Ser anfitrión garantiza el éxito? Rendimiento histórico de los locales",
+    subtitle = "% de victorias del país sede en su propio Mundial · EE.UU. será anfitrión en 2026",
+    x = NULL, y = "% de victorias"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(color = "gray40", size = 10),
+    legend.position = "none"
+  )
+```
+
+### Perfil ofensivo/defensivo de los campeones (2002–2022)
+
+```{r p7-campeones}
+campeones_df <- data.frame(
+  year   = c(2002, 2006, 2010, 2014, 2018, 2022),
+  equipo = c("Brazil", "Italy", "Spain", "Germany", "France", "Argentina")
+)
+
+perfil <- do.call(rbind, lapply(1:nrow(campeones_df), function(i) {
+  yr <- campeones_df$year[i]; eq <- campeones_df$equipo[i]
+  pm <- mundiales_wc[mundiales_wc$year == yr &
+          (mundiales_wc$home_team == eq | mundiales_wc$away_team == eq), ]
+  gf <- sum(ifelse(pm$home_team == eq, pm$home_score, pm$away_score))
+  gc <- sum(ifelse(pm$home_team == eq, pm$away_score, pm$home_score))
+  data.frame(year = yr, equipo = eq, partidos = nrow(pm),
+             gf_prom = round(gf / nrow(pm), 2),
+             gc_prom = round(gc / nrow(pm), 2))
+}))
+
+perfil$etiqueta <- paste0(perfil$equipo, "\n", perfil$year)
+perfil$etiqueta <- factor(perfil$etiqueta, levels = perfil$etiqueta)
+
+perfil_largo <- rbind(
+  data.frame(etiqueta = perfil$etiqueta, valor =  perfil$gf_prom, tipo = "Goles a favor"),
+  data.frame(etiqueta = perfil$etiqueta, valor = -perfil$gc_prom, tipo = "Goles en contra")
+)
+
+ggplot(perfil_largo, aes(x = etiqueta, y = valor, fill = tipo)) +
+  geom_bar(stat = "identity", width = 0.6) +
+  geom_hline(yintercept = 0, color = "gray30", linewidth = 0.5) +
+  scale_fill_manual(values = c("Goles a favor" = "#27ae60", "Goles en contra" = "#e74c3c")) +
+  scale_y_continuous(labels = abs, breaks = seq(-2, 3, by = 0.5)) +
+  labs(
+    title    = "Perfil ofensivo y defensivo de cada campeón del mundo (2002–2022)",
+    subtitle = "Barras verdes = goles a favor / rojas = goles en contra (promedio por partido)",
+    x = NULL, y = "Promedio de goles por partido", fill = NULL
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title    = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(color = "gray40", size = 10),
+    legend.position = "top"
+  )
+```
+
+---
+
+# Conclusiones
+
+## Hallazgos principales
+
+1. **Los Mundiales generan sistemáticamente menos goles** que el resto de los torneos. En todos los años de Copa del Mundo analizados (2002–2022), el promedio estuvo por debajo del promedio global de 2.71, lo que sugiere que la alta competencia favorece un juego más cauteloso.
+
+2. **Jugar de local sí importa, pero no en los Mundiales.** En eliminatorias y copas la ventaja local supera el 51%, pero en partidos de Mundial cae al 44.4%, posiblemente porque los encuentros se juegan en sedes neutrales o ante públicos mixtos.
+
+3. **La gran mayoría de los partidos son cerrados.** El 59.1% se decide por un gol o termina en empate; solo 1 de cada 5 puede considerarse goleada.
+
+4. **Argentina atravesó una transformación defensiva histórica.** Pasó de recibir más de 1 gol por partido a solo ~0.37 en 2023–2025, el mejor registro entre los clasificados al Mundial 2026. Esta solidez coincide con los títulos de 2021 y 2022.
+
+5. **Ser anfitrión no garantiza el éxito.** Qatar 2022 fue el peor anfitrión con 0 victorias, mientras Alemania 2006 llegó a semifinales. La localía amplifica lo que el equipo ya tiene.
+
+6. **Los campeones no son siempre los más goleadores.** España ganó el Mundial 2010 con apenas 1.14 goles a favor por partido, pero lo que comparten todos los campeones es una defensa sólida (ninguno recibió más de 1.14 goles/partido).
+
+## Reflexión y perspectivas de cara al 2026
+
+La caída sostenida del promedio de goles en años de Mundial responde probablemente a una combinación de factores tácticos y contextuales: preparación específica para cada rival, estructura eliminatoria que penaliza el riesgo y creciente paridad entre selecciones. La ventaja local pierde relevancia en los Mundiales porque los estadios permiten públicos mixtos y los árbitros internacionales tienden o al menos deberian ser más imparciales.
+
+La transformación defensiva de Argentina es el hallazgo más llamativo: pasar de más de 1 gol recibido por partido a solo 0.37 no es una mejora marginal, sino un cambio estructural asociado a la consolidación del equipo bajo Scaloni. La pregunta clave es si ese nivel se mantendrá cuando los rivales lleguen con meses de análisis de ese esquema.
+
+Finalmente, los datos de los campeones desafían la intuición popular: **ganar un Mundial exige más solidez defensiva que poder ofensivo**, lo que abre interrogantes de cara al 2026, donde Argentina y Marruecos lideran el ranking defensivo entre los clasificados.
+
+---
